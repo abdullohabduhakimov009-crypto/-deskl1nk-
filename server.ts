@@ -80,7 +80,8 @@ if (sql) {
         { name: 'hourly_rate', type: 'TEXT' },
         { name: 'payment_details', type: 'JSONB' },
         { name: 'metadata', type: 'JSONB DEFAULT \'{}\'' },
-        { name: 'last_login', type: 'TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP' }
+        { name: 'last_login', type: 'TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP' },
+        { name: 'parent_client_email', type: 'TEXT' }
       ];
 
       for (const col of missingColumns) {
@@ -148,6 +149,7 @@ if (sql) {
         CREATE TABLE IF NOT EXISTS tickets (
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
           user_id TEXT REFERENCES users(id),
+          author_uid TEXT,
           subject TEXT NOT NULL,
           description TEXT,
           status TEXT DEFAULT 'open',
@@ -157,12 +159,20 @@ if (sql) {
         )
       `;
 
+      // Migration for tickets table
+      const ticketCols = await sql`SELECT column_name FROM information_schema.columns WHERE table_name = 'tickets' AND table_schema = 'public'`;
+      const ticketColNames = ticketCols.map((c: any) => c.column_name);
+      if (!ticketColNames.includes('author_uid')) {
+        await (sql as any).query(`ALTER TABLE tickets ADD COLUMN author_uid TEXT`);
+      }
+
       // Quotations table
       await sql`
         CREATE TABLE IF NOT EXISTS quotations (
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
           job_id UUID REFERENCES jobs(id),
           engineer_id TEXT REFERENCES users(id),
+          client_uid TEXT,
           amount DECIMAL NOT NULL,
           status TEXT DEFAULT 'pending',
           metadata JSONB,
@@ -170,17 +180,32 @@ if (sql) {
         )
       `;
 
+      // Migration for quotations table
+      const quoteCols = await sql`SELECT column_name FROM information_schema.columns WHERE table_name = 'quotations' AND table_schema = 'public'`;
+      const quoteColNames = quoteCols.map((c: any) => c.column_name);
+      if (!quoteColNames.includes('client_uid')) {
+        await (sql as any).query(`ALTER TABLE quotations ADD COLUMN client_uid TEXT`);
+      }
+
       // Invoices table
       await sql`
         CREATE TABLE IF NOT EXISTS invoices (
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
           user_id TEXT REFERENCES users(id),
+          client_email TEXT,
           amount DECIMAL NOT NULL,
           status TEXT DEFAULT 'unpaid',
           metadata JSONB,
           created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         )
       `;
+
+      // Migration for invoices table
+      const invoiceCols = await sql`SELECT column_name FROM information_schema.columns WHERE table_name = 'invoices' AND table_schema = 'public'`;
+      const invoiceColNames = invoiceCols.map((c: any) => c.column_name);
+      if (!invoiceColNames.includes('client_email')) {
+        await (sql as any).query(`ALTER TABLE invoices ADD COLUMN client_email TEXT`);
+      }
 
       // Job Postings table
       await sql`
@@ -390,6 +415,7 @@ app.get("/api/db/:collection", async (req, res) => {
       
       // Map camelCase to snake_case for query fields
       const mapKey = (key: string) => {
+        if (!key || typeof key !== 'string') return key;
         if (key === 'timestamp' || key === 'createdat') return 'created_at';
         if (key === 'completedat') return 'completed_at';
         if (key === 'appliedat') return 'applied_at';
@@ -401,8 +427,8 @@ app.get("/api/db/:collection", async (req, res) => {
         return key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
       };
       
-      const mappedWhereField = whereField ? mapKey(whereField as string) : null;
-      const mappedOrderByField = orderByField ? mapKey(orderByField as string) : null;
+      const mappedWhereField = (whereField && typeof whereField === 'string') ? mapKey(whereField) : null;
+      const mappedOrderByField = (orderByField && typeof orderByField === 'string') ? mapKey(orderByField) : null;
 
       if (mappedWhereField && whereOp && whereValue) {
         const op = whereOp === '==' ? '=' : whereOp;
