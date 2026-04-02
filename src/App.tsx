@@ -2491,12 +2491,20 @@ const SignUpModal = ({ isOpen, onClose, onLoginClick, onEngineerContinue, onClie
           onClose();
         } catch (err: any) {
           console.error("Client signup error:", err);
+          let message = err.message || "Failed to create client account";
+          try {
+            const errInfo = JSON.parse(message);
+            message = errInfo.error || message;
+          } catch (e) {
+            // Not JSON
+          }
+          
           if (err.code === 'auth/email-already-in-use') {
             setError("This email is already in use. Please sign in instead.");
-          } else if (err.message?.includes('Missing or insufficient permissions')) {
+          } else if (message.includes('Missing or insufficient permissions')) {
             setError("Permission denied. Please try again or contact support.");
           } else {
-            setError(err.message || "Failed to create client account");
+            setError(message);
           }
           // Rollback state if needed
           setIsClientLoggedIn(false);
@@ -3741,10 +3749,18 @@ const AppContent = () => {
       setCurrentPage('engineer-portal');
     } catch (error: any) {
       console.error("Engineer signup error:", error);
+      let message = error instanceof Error ? error.message : 'Failed to complete engineer registration.';
+      try {
+        const errInfo = JSON.parse(message);
+        message = errInfo.error || message;
+      } catch (e) {
+        // Not JSON
+      }
+      
       notify({
         type: 'error',
         title: 'Registration Failed',
-        message: error instanceof Error ? error.message : 'Failed to complete engineer registration.'
+        message: message
       });
       throw error;
     }

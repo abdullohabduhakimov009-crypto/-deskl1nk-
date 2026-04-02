@@ -7,6 +7,7 @@ import nodemailer from "nodemailer";
 import { Server } from "socket.io";
 import { createServer } from "http";
 import { neon } from '@neondatabase/serverless';
+import { randomUUID } from "crypto";
 
 dotenv.config();
 
@@ -19,6 +20,7 @@ const io = new Server(httpServer);
 
 // Neon DB connection
 const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null;
+console.log("DATABASE_URL present:", !!process.env.DATABASE_URL);
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
@@ -30,16 +32,68 @@ if (sql) {
       // Users table
       await sql`
         CREATE TABLE IF NOT EXISTS users (
-          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          id TEXT PRIMARY KEY,
           email TEXT UNIQUE NOT NULL,
           password TEXT,
           name TEXT,
+          first_name TEXT,
+          last_name TEXT,
+          company_name TEXT,
           role TEXT NOT NULL DEFAULT 'client',
+          status TEXT DEFAULT 'Active',
+          country TEXT,
+          city TEXT,
+          specialization TEXT,
+          experience TEXT,
+          hourly_rate TEXT,
           payment_details JSONB,
-          metadata JSONB,
-          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+          metadata JSONB DEFAULT '{}',
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          last_login TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         )
       `;
+
+      // Migration for users table to ensure all columns exist
+      const columns = await sql`SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'users' AND table_schema = 'public'`;
+      const columnNames = columns.map((c: any) => c.column_name);
+      console.log("Current users table columns:", columnNames);
+      
+      // Check if id is UUID and change to TEXT if needed
+      const idCol = columns.find((c: any) => c.column_name === 'id');
+      if (idCol && idCol.data_type === 'uuid') {
+        console.log("Changing users.id from UUID to TEXT");
+        await sql`ALTER TABLE users ALTER COLUMN id TYPE TEXT`;
+      }
+      
+      const missingColumns = [
+        { name: 'password', type: 'TEXT' },
+        { name: 'name', type: 'TEXT' },
+        { name: 'role', type: 'TEXT NOT NULL DEFAULT \'client\'' },
+        { name: 'first_name', type: 'TEXT' },
+        { name: 'last_name', type: 'TEXT' },
+        { name: 'company_name', type: 'TEXT' },
+        { name: 'status', type: 'TEXT DEFAULT \'Active\'' },
+        { name: 'country', type: 'TEXT' },
+        { name: 'city', type: 'TEXT' },
+        { name: 'specialization', type: 'TEXT' },
+        { name: 'experience', type: 'TEXT' },
+        { name: 'hourly_rate', type: 'TEXT' },
+        { name: 'payment_details', type: 'JSONB' },
+        { name: 'metadata', type: 'JSONB DEFAULT \'{}\'' },
+        { name: 'last_login', type: 'TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP' }
+      ];
+
+      for (const col of missingColumns) {
+        if (!columnNames.includes(col.name)) {
+          console.log(`Adding missing column ${col.name} to users table`);
+          try {
+            // Using a direct string query for DDL
+            await (sql as any).query(`ALTER TABLE users ADD COLUMN ${col.name} ${col.type}`);
+          } catch (err) {
+            console.error(`Failed to add column ${col.name}:`, err);
+          }
+        }
+      }
       
       // Jobs table
       await sql`
@@ -47,8 +101,8 @@ if (sql) {
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
           title TEXT NOT NULL,
           description TEXT,
-          client_id UUID REFERENCES users(id),
-          engineer_id UUID REFERENCES users(id),
+          client_id TEXT REFERENCES users(id),
+          engineer_id TEXT REFERENCES users(id),
           status TEXT DEFAULT 'open',
           budget DECIMAL,
           metadata JSONB,
@@ -60,8 +114,8 @@ if (sql) {
       await sql`
         CREATE TABLE IF NOT EXISTS messages (
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-          sender_id UUID REFERENCES users(id),
-          receiver_id UUID REFERENCES users(id),
+          sender_id TEXT REFERENCES users(id),
+          receiver_id TEXT REFERENCES users(id),
           content TEXT NOT NULL,
           metadata JSONB,
           created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -72,7 +126,7 @@ if (sql) {
       await sql`
         CREATE TABLE IF NOT EXISTS notifications (
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-          user_id UUID REFERENCES users(id),
+          user_id TEXT REFERENCES users(id),
           type TEXT NOT NULL,
           message TEXT NOT NULL,
           read BOOLEAN DEFAULT FALSE,
@@ -85,7 +139,7 @@ if (sql) {
       await sql`
         CREATE TABLE IF NOT EXISTS tickets (
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-          user_id UUID REFERENCES users(id),
+          user_id TEXT REFERENCES users(id),
           subject TEXT NOT NULL,
           description TEXT,
           status TEXT DEFAULT 'open',
@@ -100,7 +154,7 @@ if (sql) {
         CREATE TABLE IF NOT EXISTS quotations (
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
           job_id UUID REFERENCES jobs(id),
-          engineer_id UUID REFERENCES users(id),
+          engineer_id TEXT REFERENCES users(id),
           amount DECIMAL NOT NULL,
           status TEXT DEFAULT 'pending',
           metadata JSONB,
@@ -112,13 +166,38 @@ if (sql) {
       await sql`
         CREATE TABLE IF NOT EXISTS invoices (
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-          user_id UUID REFERENCES users(id),
+          user_id TEXT REFERENCES users(id),
           amount DECIMAL NOT NULL,
           status TEXT DEFAULT 'unpaid',
           metadata JSONB,
           created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         )
       `;
+
+      // Migration for other tables to ensure user ID references are TEXT
+      const tablesToMigrate = [
+        { table: 'jobs', columns: ['client_id', 'engineer_id'] },
+        { table: 'messages', columns: ['sender_id', 'receiver_id'] },
+        { table: 'notifications', columns: ['user_id'] },
+        { table: 'tickets', columns: ['user_id'] },
+        { table: 'quotations', columns: ['engineer_id'] },
+        { table: 'invoices', columns: ['user_id'] }
+      ];
+
+      for (const t of tablesToMigrate) {
+        try {
+          const cols = await sql`SELECT column_name, data_type FROM information_schema.columns WHERE table_name = ${t.table}`;
+          for (const colName of t.columns) {
+            const col = cols.find((c: any) => c.column_name === colName);
+            if (col && col.data_type === 'uuid') {
+              console.log(`Changing ${t.table}.${colName} from UUID to TEXT`);
+              await (sql as any).query(`ALTER TABLE ${t.table} ALTER COLUMN ${colName} TYPE TEXT`);
+            }
+          }
+        } catch (err) {
+          console.error(`Error migrating table ${t.table}:`, err);
+        }
+      }
 
       // Generic documents table for everything else
       await sql`
@@ -156,23 +235,63 @@ app.get("/api/health", async (req, res) => {
   });
 });
 
+// Helper to map keys and filter for table columns
+async function prepareTableData(collection: string, body: any, sql: any) {
+  const columns = await sql`SELECT column_name FROM information_schema.columns WHERE table_name = ${collection} AND table_schema = 'public'`;
+  const columnNames = columns.map((c: any) => c.column_name);
+  
+  const tableData: any = {};
+  const metadata: any = body.metadata || {};
+  
+  Object.keys(body).forEach(key => {
+    if (key === 'metadata') return;
+    
+    // Map camelCase to snake_case
+    const snakeKey = key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
+    
+    if (columnNames.includes(snakeKey)) {
+      tableData[snakeKey] = body[key];
+    } else if (columnNames.includes(key)) {
+      tableData[key] = body[key];
+    } else {
+      // Put extra fields into metadata
+      metadata[key] = body[key];
+    }
+  });
+  
+  if (columnNames.includes('metadata')) {
+    tableData.metadata = metadata;
+  }
+  
+  return tableData;
+}
+
 // Auth routes
 app.post("/api/auth/signup", async (req, res) => {
-  if (!sql) return res.status(500).json({ error: "Database not connected" });
-  const { email, password, name, role } = req.body;
+  console.log("Signup request received:", req.body.email);
+  if (!sql) {
+    console.error("Signup failed: Database not connected");
+    return res.status(500).json({ error: "Database not connected" });
+  }
+  const { email, password, name, role, id } = req.body;
+  const userId = id || randomUUID();
   try {
     const [existing] = await sql`SELECT id FROM users WHERE email = ${email}`;
-    if (existing) return res.status(400).json({ error: "Email already in use" });
+    if (existing) {
+      console.warn("Signup failed: Email already in use", email);
+      return res.status(400).json({ error: "Email already in use" });
+    }
 
     const [user] = await sql`
-      INSERT INTO users (email, password, name, role)
-      VALUES (${email}, ${password}, ${name}, ${role || 'client'})
+      INSERT INTO users (id, email, password, name, role)
+      VALUES (${userId}, ${email}, ${password}, ${name}, ${role || 'client'})
       RETURNING id, email, name, role, created_at
     `;
+    console.log("User created successfully:", user.id);
     res.status(201).json(user);
   } catch (error) {
     console.error("Signup error:", error);
-    res.status(500).json({ error: "Failed to create user" });
+    res.status(500).json({ error: "Failed to create user", details: error instanceof Error ? error.message : String(error) });
   }
 });
 
@@ -210,10 +329,10 @@ app.get("/api/db/:collection", async (req, res) => {
       if (whereField && whereOp && whereValue) {
         const op = whereOp === '==' ? '=' : whereOp;
         const query = `SELECT * FROM ${collection} WHERE ${whereField} ${op} $1 ${orderByField ? `ORDER BY ${orderByField} ${orderDirection === 'desc' ? 'DESC' : 'ASC'}` : 'ORDER BY created_at DESC'} ${limitCount ? `LIMIT ${limitCount}` : ''}`;
-        data = await (sql as any).unsafe(query, [whereValue]);
+        data = await (sql as any).query(query, [whereValue]);
       } else {
         const query = `SELECT * FROM ${collection} ${orderByField ? `ORDER BY ${orderByField} ${orderDirection === 'desc' ? 'DESC' : 'ASC'}` : 'ORDER BY created_at DESC'} ${limitCount ? `LIMIT ${limitCount}` : ''}`;
-        data = await (sql as any).unsafe(query);
+        data = await (sql as any).query(query);
       }
       res.json(data);
     } else {
@@ -221,10 +340,10 @@ app.get("/api/db/:collection", async (req, res) => {
       let docs;
       if (whereField && whereOp && whereValue) {
         const query = `SELECT id, data, created_at FROM documents WHERE collection = $1 AND data->>$2 = $3 ORDER BY created_at DESC ${limitCount ? `LIMIT ${limitCount}` : ''}`;
-        docs = await (sql as any).unsafe(query, [collection, whereField, whereValue]);
+        docs = await (sql as any).query(query, [collection, whereField, whereValue]);
       } else {
         const query = `SELECT id, data, created_at FROM documents WHERE collection = $1 ORDER BY created_at DESC ${limitCount ? `LIMIT ${limitCount}` : ''}`;
-        docs = await (sql as any).unsafe(query, [collection]);
+        docs = await (sql as any).query(query, [collection]);
       }
       const data = docs.map((d: any) => ({ ...d.data, id: d.id, createdAt: d.created_at }));
       res.json(data);
@@ -242,7 +361,7 @@ app.get("/api/db/:collection/:id", async (req, res) => {
     const tables = ['users', 'jobs', 'messages', 'notifications', 'tickets', 'quotations', 'invoices'];
     let data;
     if (tables.includes(collection)) {
-      const result = await (sql as any).unsafe(`SELECT * FROM ${collection} WHERE id = $1`, [id]);
+      const result = await (sql as any).query(`SELECT * FROM ${collection} WHERE id = $1`, [id]);
       data = result[0];
     } else {
       const result = await sql`SELECT data FROM documents WHERE id = ${id} AND collection = ${collection}`;
@@ -264,11 +383,12 @@ app.post("/api/db/:collection", async (req, res) => {
     const tables = ['users', 'jobs', 'messages', 'notifications', 'tickets', 'quotations', 'invoices'];
     let resultData;
     if (tables.includes(collection)) {
-      const keys = Object.keys(body);
-      const values = Object.values(body);
+      const tableData = await prepareTableData(collection, body, sql);
+      const keys = Object.keys(tableData);
+      const values = Object.values(tableData);
       const placeholders = keys.map((_, i) => `$${i + 1}`).join(', ');
       const query = `INSERT INTO ${collection} (${keys.join(', ')}) VALUES (${placeholders}) RETURNING *`;
-      const result = await (sql as any).unsafe(query, values);
+      const result = await (sql as any).query(query, values);
       resultData = result[0];
     } else {
       const result = await sql`
@@ -286,6 +406,46 @@ app.post("/api/db/:collection", async (req, res) => {
   }
 });
 
+app.post("/api/db/:collection/:id", async (req, res) => {
+  if (!sql) return res.status(500).json({ error: "Database not connected" });
+  const { collection, id } = req.params;
+  const body = req.body;
+  try {
+    const tables = ['users', 'jobs', 'messages', 'notifications', 'tickets', 'quotations', 'invoices'];
+    if (tables.includes(collection)) {
+      // Upsert for specific tables
+      const tableData = await prepareTableData(collection, body, sql);
+      const keys = Object.keys(tableData);
+      const values = Object.values(tableData);
+      
+      // Check if exists
+      const [existing] = await (sql as any).query(`SELECT id FROM ${collection} WHERE id = $1`, [id]);
+      
+      if (existing) {
+        // Update
+        const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
+        await (sql as any).query(`UPDATE ${collection} SET ${setClause} WHERE id = $${keys.length + 1}`, [...values, id]);
+      } else {
+        // Insert with specified ID
+        const placeholders = keys.map((_, i) => `$${i + 1}`).join(', ');
+        await (sql as any).query(`INSERT INTO ${collection} (id, ${keys.join(', ')}) VALUES ($${keys.length + 1}, ${placeholders})`, [...values, id]);
+      }
+    } else {
+      // Generic documents table upsert
+      await sql`
+        INSERT INTO documents (id, collection, data)
+        VALUES (${id}, ${collection}, ${body})
+        ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, collection = EXCLUDED.collection
+      `;
+    }
+    io.emit("data:changed", collection);
+    res.status(200).json({ success: true });
+  } catch (error) {
+    console.error(`Error upserting ${collection}/${id}:`, error);
+    res.status(500).json({ error: "Failed to upsert document" });
+  }
+});
+
 app.put("/api/db/:collection/:id", async (req, res) => {
   if (!sql) return res.status(500).json({ error: "Database not connected" });
   const { collection, id } = req.params;
@@ -293,11 +453,12 @@ app.put("/api/db/:collection/:id", async (req, res) => {
   try {
     const tables = ['users', 'jobs', 'messages', 'notifications', 'tickets', 'quotations', 'invoices'];
     if (tables.includes(collection)) {
-      const keys = Object.keys(body);
-      const values = Object.values(body);
+      const tableData = await prepareTableData(collection, body, sql);
+      const keys = Object.keys(tableData);
+      const values = Object.values(tableData);
       const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
       const query = `UPDATE ${collection} SET ${setClause} WHERE id = $${keys.length + 1} RETURNING *`;
-      await (sql as any).unsafe(query, [...values, id]);
+      await (sql as any).query(query, [...values, id]);
     } else {
       await sql`
         UPDATE documents 
@@ -319,7 +480,7 @@ app.delete("/api/db/:collection/:id", async (req, res) => {
   try {
     const tables = ['users', 'jobs', 'messages', 'notifications', 'tickets', 'quotations', 'invoices'];
     if (tables.includes(collection)) {
-      await (sql as any).unsafe(`DELETE FROM ${collection} WHERE id = $1`, [id]);
+      await (sql as any).query(`DELETE FROM ${collection} WHERE id = $1`, [id]);
     } else {
       await sql`DELETE FROM documents WHERE id = ${id} AND collection = ${collection}`;
     }
@@ -390,6 +551,16 @@ io.on("connection", (socket) => {
   
   socket.on("data:changed", (collection) => {
     socket.broadcast.emit("data:refetch", collection);
+  });
+});
+
+// Global error handler
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  console.error("Unhandled error:", err);
+  res.status(500).json({ 
+    error: "Internal server error", 
+    message: err.message,
+    stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
   });
 });
 

@@ -40,17 +40,19 @@ const GeminiAssistant: React.FC<GeminiAssistantProps> = ({ isOpen, onClose }) =>
 
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
-      const model = "gemini-3-flash-preview";
       
-      const chatHistory = messages.map(m => ({
-        role: m.role,
-        parts: [{ text: m.text }]
-      }));
+      // Filter out the initial greeting from history and ensure it starts with a user message
+      const history = messages
+        .filter((m, i) => i > 0) // Skip the first greeting message
+        .map(m => ({
+          role: m.role,
+          parts: [{ text: m.text }]
+        }));
 
       const response = await ai.models.generateContent({
-        model,
+        model: "gemini-3-flash-preview",
         contents: [
-          ...chatHistory,
+          ...history,
           { role: 'user', parts: [{ text: userMessage }] }
         ],
         config: {
@@ -60,9 +62,10 @@ const GeminiAssistant: React.FC<GeminiAssistantProps> = ({ isOpen, onClose }) =>
 
       const aiText = response.text || "I'm sorry, I couldn't process that request.";
       setMessages(prev => [...prev, { role: 'model', text: aiText }]);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Gemini Error:", error);
-      setMessages(prev => [...prev, { role: 'model', text: "Sorry, I'm having trouble connecting right now. Please try again later." }]);
+      const errorMessage = error?.message || "Unknown error";
+      setMessages(prev => [...prev, { role: 'model', text: `Sorry, I'm having trouble connecting right now (${errorMessage}). Please try again later.` }]);
     } finally {
       setIsLoading(false);
     }
@@ -123,9 +126,11 @@ const GeminiAssistant: React.FC<GeminiAssistantProps> = ({ isOpen, onClose }) =>
                         ? 'bg-brand-teal text-brand-dark rounded-tr-none' 
                         : 'bg-white/5 text-slate-200 border border-white/10 rounded-tl-none'
                     }`}>
-                      <ReactMarkdown className="prose prose-invert prose-sm max-w-none">
-                        {m.text}
-                      </ReactMarkdown>
+                      <div className="prose prose-invert prose-sm max-w-none">
+                        <ReactMarkdown>
+                          {m.text}
+                        </ReactMarkdown>
+                      </div>
                     </div>
                   </div>
                 </div>

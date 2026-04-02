@@ -38,39 +38,61 @@ class LocalDb {
       body: JSON.stringify({ email, password: pass })
     });
     
+    const contentType = response.headers.get("content-type");
     if (!response.ok) {
-      const error = await response.json();
-      const err = new Error(error.error || 'auth/failed');
-      (err as any).code = error.error === 'User not found' ? 'auth/user-not-found' : 'auth/wrong-password';
+      let errorMessage = 'auth/failed';
+      if (contentType && contentType.includes("application/json")) {
+        const error = await response.json();
+        errorMessage = error.error || errorMessage;
+      } else {
+        errorMessage = await response.text();
+      }
+      const err = new Error(errorMessage);
+      (err as any).code = errorMessage === 'User not found' ? 'auth/user-not-found' : 'auth/wrong-password';
       throw err;
     }
 
-    const user = await response.json();
-    const mappedUser = { ...user, uid: user.id };
-    localStorage.setItem('desklink_user', JSON.stringify(mappedUser));
-    this.notifyListeners('users');
-    return mappedUser;
+    if (contentType && contentType.includes("application/json")) {
+      const user = await response.json();
+      const mappedUser = { ...user, uid: user.id };
+      localStorage.setItem('desklink_user', JSON.stringify(mappedUser));
+      this.notifyListeners('users');
+      return mappedUser;
+    } else {
+      throw new Error("Invalid server response: expected JSON");
+    }
   }
 
   async signUp(email: string, pass: string, role: string, uid?: string, name?: string): Promise<User> {
     const response = await fetch('/api/auth/signup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password: pass, role, name })
+      body: JSON.stringify({ email, password: pass, role, name, id: uid })
     });
 
+    const contentType = response.headers.get("content-type");
     if (!response.ok) {
-      const error = await response.json();
-      const err = new Error(error.error || 'auth/failed');
+      let errorMessage = 'auth/failed';
+      if (contentType && contentType.includes("application/json")) {
+        const error = await response.json();
+        errorMessage = error.error || errorMessage;
+      } else {
+        errorMessage = await response.text();
+      }
+      const err = new Error(errorMessage);
       (err as any).code = 'auth/email-already-in-use';
       throw err;
     }
 
-    const user = await response.json();
-    const mappedUser = { ...user, uid: user.id };
-    localStorage.setItem('desklink_user', JSON.stringify(mappedUser));
-    this.notifyListeners('users');
-    return mappedUser;
+    if (contentType && contentType.includes("application/json")) {
+      const user = await response.json();
+      const mappedUser = { ...user, uid: user.id };
+      localStorage.setItem('desklink_user', JSON.stringify(mappedUser));
+      this.notifyListeners('users');
+      return mappedUser;
+    } else {
+      throw new Error("Invalid server response: expected JSON");
+    }
   }
 
   signOut() {
@@ -90,6 +112,12 @@ class LocalDb {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Failed to add document: ${errorText}`);
+    }
+    
     const result = await response.json();
     return { id: result.id };
   }
@@ -100,6 +128,12 @@ class LocalDb {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Failed to set document: ${errorText}`);
+    }
+    
     return response.json();
   }
 
