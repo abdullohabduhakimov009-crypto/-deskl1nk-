@@ -106,9 +106,17 @@ if (sql) {
           status TEXT DEFAULT 'open',
           budget DECIMAL,
           metadata JSONB,
-          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          completed_at TIMESTAMP WITH TIME ZONE
         )
       `;
+
+      // Migration for jobs table
+      const jobCols = await sql`SELECT column_name FROM information_schema.columns WHERE table_name = 'jobs' AND table_schema = 'public'`;
+      const jobColNames = jobCols.map((c: any) => c.column_name);
+      if (!jobColNames.includes('completed_at')) {
+        await (sql as any).query(`ALTER TABLE jobs ADD COLUMN completed_at TIMESTAMP WITH TIME ZONE`);
+      }
 
       // Messages table
       await sql`
@@ -174,6 +182,48 @@ if (sql) {
         )
       `;
 
+      // Job Postings table
+      await sql`
+        CREATE TABLE IF NOT EXISTS job_postings (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          title TEXT NOT NULL,
+          description TEXT,
+          company TEXT,
+          location TEXT,
+          salary TEXT,
+          type TEXT,
+          status TEXT DEFAULT 'active',
+          metadata JSONB,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        )
+      `;
+
+      // Opportunities table
+      await sql`
+        CREATE TABLE IF NOT EXISTS opportunities (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          title TEXT NOT NULL,
+          description TEXT,
+          client_id TEXT REFERENCES users(id),
+          status TEXT DEFAULT 'open',
+          metadata JSONB,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        )
+      `;
+
+      // Applications table
+      await sql`
+        CREATE TABLE IF NOT EXISTS applications (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          job_id UUID,
+          engineer_id TEXT REFERENCES users(id),
+          status TEXT DEFAULT 'pending',
+          metadata JSONB,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          applied_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        )
+      `;
+
       // Migration for other tables to ensure user ID references are TEXT
       const tablesToMigrate = [
         { table: 'jobs', columns: ['client_id', 'engineer_id'] },
@@ -181,7 +231,9 @@ if (sql) {
         { table: 'notifications', columns: ['user_id'] },
         { table: 'tickets', columns: ['user_id'] },
         { table: 'quotations', columns: ['engineer_id'] },
-        { table: 'invoices', columns: ['user_id'] }
+        { table: 'invoices', columns: ['user_id'] },
+        { table: 'opportunities', columns: ['client_id'] },
+        { table: 'applications', columns: ['engineer_id'] }
       ];
 
       for (const t of tablesToMigrate) {
@@ -247,7 +299,17 @@ async function prepareTableData(collection: string, body: any, sql: any) {
     if (key === 'metadata') return;
     
     // Map camelCase to snake_case
-    const snakeKey = key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
+    let snakeKey = key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
+    
+    // Handle common lowercase versions
+    if (snakeKey === 'createdat' || snakeKey === 'timestamp') snakeKey = 'created_at';
+    if (snakeKey === 'completedat') snakeKey = 'completed_at';
+    if (snakeKey === 'appliedat') snakeKey = 'applied_at';
+    if (snakeKey === 'clientid') snakeKey = 'client_id';
+    if (snakeKey === 'engineerid') snakeKey = 'engineer_id';
+    if (snakeKey === 'userid') snakeKey = 'user_id';
+    if (snakeKey === 'senderid') snakeKey = 'sender_id';
+    if (snakeKey === 'receiverid') snakeKey = 'receiver_id';
     
     if (columnNames.includes(snakeKey)) {
       tableData[snakeKey] = body[key];
@@ -319,19 +381,35 @@ app.get("/api/db/:collection", async (req, res) => {
 
   try {
     // Check if it's a specific table or generic documents
-    const tables = ['users', 'jobs', 'messages', 'notifications', 'tickets', 'quotations', 'invoices'];
+    const tables = ['users', 'jobs', 'messages', 'notifications', 'tickets', 'quotations', 'invoices', 'job_postings', 'opportunities', 'applications'];
     let data;
 
     if (tables.includes(collection)) {
       // Basic implementation for specific tables
       let data;
+      
+      // Map camelCase to snake_case for query fields
+      const mapKey = (key: string) => {
+        if (key === 'timestamp' || key === 'createdat') return 'created_at';
+        if (key === 'completedat') return 'completed_at';
+        if (key === 'appliedat') return 'applied_at';
+        if (key === 'clientid') return 'client_id';
+        if (key === 'engineerid') return 'engineer_id';
+        if (key === 'userid') return 'user_id';
+        if (key === 'senderid') return 'sender_id';
+        if (key === 'receiverid') return 'receiver_id';
+        return key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
+      };
+      
+      const mappedWhereField = whereField ? mapKey(whereField as string) : null;
+      const mappedOrderByField = orderByField ? mapKey(orderByField as string) : null;
 
-      if (whereField && whereOp && whereValue) {
+      if (mappedWhereField && whereOp && whereValue) {
         const op = whereOp === '==' ? '=' : whereOp;
-        const query = `SELECT * FROM ${collection} WHERE ${whereField} ${op} $1 ${orderByField ? `ORDER BY ${orderByField} ${orderDirection === 'desc' ? 'DESC' : 'ASC'}` : 'ORDER BY created_at DESC'} ${limitCount ? `LIMIT ${limitCount}` : ''}`;
+        const query = `SELECT * FROM ${collection} WHERE ${mappedWhereField} ${op} $1 ${mappedOrderByField ? `ORDER BY ${mappedOrderByField} ${orderDirection === 'desc' ? 'DESC' : 'ASC'}` : 'ORDER BY created_at DESC'} ${limitCount ? `LIMIT ${limitCount}` : ''}`;
         data = await (sql as any).query(query, [whereValue]);
       } else {
-        const query = `SELECT * FROM ${collection} ${orderByField ? `ORDER BY ${orderByField} ${orderDirection === 'desc' ? 'DESC' : 'ASC'}` : 'ORDER BY created_at DESC'} ${limitCount ? `LIMIT ${limitCount}` : ''}`;
+        const query = `SELECT * FROM ${collection} ${mappedOrderByField ? `ORDER BY ${mappedOrderByField} ${orderDirection === 'desc' ? 'DESC' : 'ASC'}` : 'ORDER BY created_at DESC'} ${limitCount ? `LIMIT ${limitCount}` : ''}`;
         data = await (sql as any).query(query);
       }
       res.json(data);
@@ -380,7 +458,7 @@ app.post("/api/db/:collection", async (req, res) => {
   const { collection } = req.params;
   const body = req.body;
   try {
-    const tables = ['users', 'jobs', 'messages', 'notifications', 'tickets', 'quotations', 'invoices'];
+    const tables = ['users', 'jobs', 'messages', 'notifications', 'tickets', 'quotations', 'invoices', 'job_postings', 'opportunities', 'applications'];
     let resultData;
     if (tables.includes(collection)) {
       const tableData = await prepareTableData(collection, body, sql);
@@ -411,7 +489,7 @@ app.post("/api/db/:collection/:id", async (req, res) => {
   const { collection, id } = req.params;
   const body = req.body;
   try {
-    const tables = ['users', 'jobs', 'messages', 'notifications', 'tickets', 'quotations', 'invoices'];
+    const tables = ['users', 'jobs', 'messages', 'notifications', 'tickets', 'quotations', 'invoices', 'job_postings', 'opportunities', 'applications'];
     if (tables.includes(collection)) {
       // Upsert for specific tables
       const tableData = await prepareTableData(collection, body, sql);
@@ -451,7 +529,7 @@ app.put("/api/db/:collection/:id", async (req, res) => {
   const { collection, id } = req.params;
   const body = req.body;
   try {
-    const tables = ['users', 'jobs', 'messages', 'notifications', 'tickets', 'quotations', 'invoices'];
+    const tables = ['users', 'jobs', 'messages', 'notifications', 'tickets', 'quotations', 'invoices', 'job_postings', 'opportunities', 'applications'];
     if (tables.includes(collection)) {
       const tableData = await prepareTableData(collection, body, sql);
       const keys = Object.keys(tableData);
@@ -478,7 +556,7 @@ app.delete("/api/db/:collection/:id", async (req, res) => {
   if (!sql) return res.status(500).json({ error: "Database not connected" });
   const { collection, id } = req.params;
   try {
-    const tables = ['users', 'jobs', 'messages', 'notifications', 'tickets', 'quotations', 'invoices'];
+    const tables = ['users', 'jobs', 'messages', 'notifications', 'tickets', 'quotations', 'invoices', 'job_postings', 'opportunities', 'applications'];
     if (tables.includes(collection)) {
       await (sql as any).query(`DELETE FROM ${collection} WHERE id = $1`, [id]);
     } else {

@@ -80,7 +80,11 @@ class LocalDb {
         errorMessage = await response.text();
       }
       const err = new Error(errorMessage);
-      (err as any).code = 'auth/email-already-in-use';
+      if (errorMessage === 'Email already in use') {
+        (err as any).code = 'auth/email-already-in-use';
+      } else {
+        (err as any).code = 'auth/failed';
+      }
       throw err;
     }
 
@@ -147,11 +151,26 @@ class LocalDb {
       };
     }
     const item = await response.json();
+    
+    // Map snake_case to camelCase for frontend compatibility
+    const mappedItem = { ...item };
+    if (item.created_at) {
+      mappedItem.createdAt = item.created_at;
+      mappedItem.timestamp = item.created_at;
+    }
+    if (item.completed_at) mappedItem.completedAt = item.completed_at;
+    if (item.client_id) mappedItem.clientId = item.client_id;
+    if (item.engineer_id) mappedItem.engineerId = item.engineer_id;
+    if (item.user_id) mappedItem.userId = item.user_id;
+    if (item.sender_id) mappedItem.senderId = item.sender_id;
+    if (item.receiver_id) mappedItem.receiverId = item.receiver_id;
+
     return {
       id,
       exists: () => !!item,
-      data: () => item,
-      get: (field: string) => item ? item[field] : undefined
+      data: () => mappedItem,
+      get: (field: string) => mappedItem[field],
+      metadata: { hasPendingWrites: false }
     };
   }
 
@@ -174,15 +193,55 @@ class LocalDb {
     }
 
     const response = await fetch(url);
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`API Error fetching ${collectionName}:`, errorText);
+      return {
+        docs: [],
+        docChanges: () => [],
+        forEach: (callback: any) => {},
+        empty: true,
+        size: 0,
+        exists: () => false
+      };
+    }
+    
     const items = await response.json();
     
-    const docs = items.map((item: any) => ({
-      id: item.id || item.uid,
-      exists: () => true,
-      data: () => item,
-      get: (field: string) => item[field],
-      metadata: { hasPendingWrites: false }
-    }));
+    if (!Array.isArray(items)) {
+      console.error(`API Error: expected array for ${collectionName}, got:`, items);
+      return {
+        docs: [],
+        docChanges: () => [],
+        forEach: (callback: any) => {},
+        empty: true,
+        size: 0,
+        exists: () => false
+      };
+    }
+    
+    const docs = items.map((item: any) => {
+      // Map snake_case to camelCase for frontend compatibility
+      const mappedItem = { ...item };
+      if (item.created_at) {
+        mappedItem.createdAt = item.created_at;
+        mappedItem.timestamp = item.created_at;
+      }
+      if (item.completed_at) mappedItem.completedAt = item.completed_at;
+      if (item.client_id) mappedItem.clientId = item.client_id;
+      if (item.engineer_id) mappedItem.engineerId = item.engineer_id;
+      if (item.user_id) mappedItem.userId = item.user_id;
+      if (item.sender_id) mappedItem.senderId = item.sender_id;
+      if (item.receiver_id) mappedItem.receiverId = item.receiver_id;
+      
+      return {
+        id: item.id || item.uid,
+        exists: () => true,
+        data: () => mappedItem,
+        get: (field: string) => mappedItem[field],
+        metadata: { hasPendingWrites: false }
+      };
+    });
 
     return {
       docs,
