@@ -411,7 +411,6 @@ app.get("/api/db/:collection", async (req, res) => {
 
     if (tables.includes(collection)) {
       // Basic implementation for specific tables
-      let data;
       
       // Map camelCase to snake_case for query fields
       const mapKey = (key: string) => {
@@ -449,8 +448,8 @@ app.get("/api/db/:collection", async (req, res) => {
         const query = `SELECT id, data, created_at FROM documents WHERE collection = $1 ORDER BY created_at DESC ${limitCount ? `LIMIT ${limitCount}` : ''}`;
         docs = await (sql as any).query(query, [collection]);
       }
-      const data = docs.map((d: any) => ({ ...d.data, id: d.id, createdAt: d.created_at }));
-      res.json(data);
+      const docsData = docs.map((d: any) => ({ ...d.data, id: d.id, createdAt: d.created_at }));
+      res.json(docsData);
     }
   } catch (error) {
     console.error(`Error fetching ${collection}:`, error);
