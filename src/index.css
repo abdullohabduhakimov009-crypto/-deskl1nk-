@@ -1,0 +1,263 @@
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800;900&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Poppins", ui-sans-serif, system-ui, sans-serif;
+  --color-brand-teal: #2dd4bf;
+  --color-brand-dark: #000000;
+  --color-brand-card: #0a0f1a;
+  --font-weight-normal: 300;
+  --font-weight-medium: 400;
+  --font-weight-semibold: 500;
+  --font-weight-bold: 600;
+  --font-weight-extrabold: 700;
+  --font-weight-black: 800;
+  --shadow-glow: 0 0 20px rgba(45, 212, 191, 0.4);
+  --shadow-glow-strong: 0 0 35px rgba(45, 212, 191, 0.6);
+}
+
+@layer base {
+  html, body {
+    @apply bg-brand-dark text-white font-sans antialiased overflow-x-hidden transition-colors duration-500;
+  }
+
+  .light-mode body {
+    @apply bg-slate-50 text-slate-900;
+  }
+}
+
+.light-mode {
+  --color-brand-dark: #f8fafc;
+  --color-brand-card: #ffffff;
+  --color-brand-teal: #0d9488;
+  --shadow-glow: 0 0 15px rgba(13, 148, 136, 0.2);
+  --shadow-glow-strong: 0 0 25px rgba(13, 148, 136, 0.3);
+}
+
+.light-mode .glass-card {
+  @apply bg-white border-slate-200 shadow-xl shadow-slate-200/50 md:backdrop-blur-md backdrop-blur-none;
+}
+
+.light-mode .text-white,
+.light-mode .text-white\/100,
+.light-mode .text-white\/95,
+.light-mode .text-white\/90,
+.light-mode .text-white\/80 {
+  @apply text-slate-900;
+}
+
+.light-mode .text-white\/70,
+.light-mode .text-white\/75 {
+  @apply text-slate-600;
+}
+
+.light-mode .text-white\/60,
+.light-mode .text-white\/65 {
+  @apply text-slate-500;
+}
+
+.light-mode .text-white\/50 {
+  @apply text-slate-400;
+}
+
+.light-mode .text-white\/40 {
+  @apply text-slate-400;
+}
+
+.light-mode .text-white\/20,
+.light-mode .text-white\/30 {
+  @apply text-slate-300;
+}
+
+.light-mode .text-white\/10,
+.light-mode .text-white\/5 {
+  @apply text-slate-200;
+}
+
+/* Ensure slate text is visible in light mode */
+.light-mode .text-slate-900 { color: #0f172a !important; }
+.light-mode .text-slate-800 { color: #1e293b !important; }
+.light-mode .text-slate-700 { color: #334155 !important; }
+.light-mode .text-slate-600 { color: #475569 !important; }
+.light-mode .text-slate-500 { color: #64748b !important; }
+.light-mode .text-slate-400 { color: #94a3b8 !important; }
+.light-mode .text-slate-300 { color: #cbd5e1 !important; }
+.light-mode .text-slate-200 { color: #e2e8f0 !important; }
+.light-mode .text-slate-100 { color: #f1f5f9 !important; }
+
+.light-mode .bg-brand-dark {
+  @apply bg-slate-50;
+}
+
+.light-mode .border-white\/10 {
+  @apply border-slate-200;
+}
+
+.light-mode .border-white\/20 {
+  @apply border-slate-300;
+}
+
+.light-mode .border-white\/5 {
+  @apply border-slate-200;
+}
+
+.light-mode .bg-white\/5 {
+  @apply bg-slate-100;
+}
+
+.light-mode .bg-white\/10 {
+  @apply bg-slate-200;
+}
+
+.light-mode .bg-white\/\[0\.08\] {
+  @apply bg-slate-100;
+}
+
+.light-mode .bg-brand-card {
+  @apply bg-white;
+}
+
+.light-mode .btn-secondary {
+  @apply bg-white text-slate-900 border-slate-200 hover:bg-slate-50;
+}
+
+.light-mode .input-field {
+  @apply bg-white border-slate-200 text-slate-900 placeholder:text-slate-300;
+}
+
+.light-mode .text-brand-teal {
+  @apply text-teal-600;
+}
+
+.light-mode .bg-brand-teal\/10 {
+  @apply bg-brand-teal/20;
+}
+
+.light-mode .bg-brand-teal\/20 {
+  @apply bg-brand-teal/30;
+}
+
+.light-mode .bg-brand-teal {
+  @apply bg-teal-500;
+}
+
+.light-mode .text-brand-dark {
+  @apply text-slate-900;
+}
+
+.light-mode .bg-brand-dark\/80 {
+  @apply bg-slate-50/80;
+}
+
+.light-mode .bg-brand-dark\/40 {
+  @apply bg-slate-50/40;
+}
+
+.light-mode .from-brand-dark\/80 {
+  @apply from-slate-50/80;
+}
+
+.light-mode .via-brand-dark\/40 {
+  @apply via-slate-50/40;
+}
+
+.light-mode .to-brand-dark\/80 {
+  @apply to-slate-50/80;
+}
+
+.light-mode .from-brand-dark {
+  @apply from-slate-50;
+}
+
+.light-mode .via-brand-dark {
+  @apply via-slate-50;
+}
+
+.light-mode .to-brand-dark {
+  @apply to-slate-50;
+}
+
+@layer base {
+  html, body {
+    @apply bg-brand-dark text-white font-sans antialiased overflow-x-hidden;
+  }
+}
+
+.glow-effect {
+  box-shadow: var(--shadow-glow);
+}
+
+.glow-effect-strong {
+  box-shadow: var(--shadow-glow-strong);
+}
+
+.text-gradient-rose {
+  @apply bg-clip-text text-transparent bg-linear-to-r from-rose-400 to-pink-400;
+}
+
+.glass-card {
+  @apply bg-white/5 border border-white/[0.05] md:backdrop-blur-sm backdrop-blur-none rounded-2xl transition-all duration-300;
+}
+
+.transform-style-3d {
+  transform-style: preserve-3d;
+}
+
+.hover-glow {
+  @apply relative overflow-hidden transition-all duration-500;
+}
+
+.hover-glow:hover {
+  @apply bg-white/10;
+}
+
+.btn-primary {
+  @apply px-8 py-4 bg-brand-teal text-brand-dark font-semibold rounded-xl hover:bg-teal-300 transition-all flex items-center gap-2;
+}
+
+.btn-secondary {
+  @apply px-8 py-4 bg-white/5 text-white font-semibold rounded-xl border border-white/10 hover:bg-white/10 transition-all flex items-center gap-2;
+}
+
+.input-field {
+  @apply w-full flex-1 bg-white/5 border border-white/10 rounded-xl py-3 px-4 focus:outline-none focus:border-brand-teal/50 transition-colors placeholder:text-white/20;
+}
+
+.input-field.with-icon {
+  @apply !pl-16;
+}
+
+/* Hide number input spinners */
+input::-webkit-outer-spin-button,
+input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type=number] {
+  -moz-appearance: textfield;
+}
+
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar {
+    height: 6px;
+    width: 6px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    @apply bg-slate-300 rounded-full;
+  }
+  .custom-scrollbar:hover::-webkit-scrollbar-thumb {
+    @apply bg-slate-400;
+  }
+}
