@@ -79,6 +79,7 @@ import ClientPortal from "./components/ClientPortal";
 import AdminPortal from "./components/AdminPortal";
 import ContactPage from "./components/ContactPage";
 import { v4 as uuidv4 } from 'uuid';
+import { io } from 'socket.io-client';
 import { 
   auth, 
   db, 
@@ -3503,6 +3504,25 @@ const LogTicket = () => {
 };
 
 const AppContent = () => {
+  // Socket initialization for real-time updates
+  useEffect(() => {
+    const socket = io();
+    
+    socket.on('connect', () => {
+      console.log('Socket connected');
+    });
+
+    socket.on('data:changed', (collection: string) => {
+      console.log(`Data changed in ${collection}`);
+      // Dispatch custom event for localDb to pick up
+      window.dispatchEvent(new CustomEvent('db-changed', { detail: collection }));
+    });
+
+    return () => {
+      socket.disconnect();
+    };
+  }, []);
+
   const { t } = useLanguage();
   const [currentPage, setCurrentPage] = useState(() => localStorage.getItem('desklink_currentPage') || 'home');
   const [isAIAssistantOpen, setIsAIAssistantOpen] = useState(false);

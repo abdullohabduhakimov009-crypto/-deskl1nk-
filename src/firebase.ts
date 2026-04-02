@@ -15,13 +15,19 @@ export const onAuthStateChanged = (authInstance: any, callback: (user: any) => v
   const user = localDb.getCurrentUser();
   callback(user);
   
-  // Mock listener
-  const interval = setInterval(() => {
-    const currentUser = localDb.getCurrentUser();
-    // This is a simple mock, in a real app we'd use an event emitter
-  }, 1000);
+  // Listen for user changes
+  const handleUserChanged = (e: any) => {
+    if (e.detail === 'users') {
+      const currentUser = localDb.getCurrentUser();
+      callback(currentUser);
+    }
+  };
 
-  return () => clearInterval(interval);
+  window.addEventListener('db-changed', handleUserChanged as any);
+
+  return () => {
+    window.removeEventListener('db-changed', handleUserChanged as any);
+  };
 };
 
 export const signOut = async (authInstance: any) => {

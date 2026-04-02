@@ -32,8 +32,11 @@ if (sql) {
         CREATE TABLE IF NOT EXISTS users (
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
           email TEXT UNIQUE NOT NULL,
+          password TEXT,
           name TEXT,
           role TEXT NOT NULL DEFAULT 'client',
+          payment_details JSONB,
+          metadata JSONB,
           created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         )
       `;
@@ -45,7 +48,10 @@ if (sql) {
           title TEXT NOT NULL,
           description TEXT,
           client_id UUID REFERENCES users(id),
+          engineer_id UUID REFERENCES users(id),
           status TEXT DEFAULT 'open',
+          budget DECIMAL,
+          metadata JSONB,
           created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         )
       `;
@@ -57,6 +63,7 @@ if (sql) {
           sender_id UUID REFERENCES users(id),
           receiver_id UUID REFERENCES users(id),
           content TEXT NOT NULL,
+          metadata JSONB,
           created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         )
       `;
@@ -69,11 +76,61 @@ if (sql) {
           type TEXT NOT NULL,
           message TEXT NOT NULL,
           read BOOLEAN DEFAULT FALSE,
+          metadata JSONB,
           created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         )
       `;
 
-      console.log("Database initialized successfully with core tables");
+      // Tickets table
+      await sql`
+        CREATE TABLE IF NOT EXISTS tickets (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          user_id UUID REFERENCES users(id),
+          subject TEXT NOT NULL,
+          description TEXT,
+          status TEXT DEFAULT 'open',
+          priority TEXT DEFAULT 'medium',
+          metadata JSONB,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        )
+      `;
+
+      // Quotations table
+      await sql`
+        CREATE TABLE IF NOT EXISTS quotations (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          job_id UUID REFERENCES jobs(id),
+          engineer_id UUID REFERENCES users(id),
+          amount DECIMAL NOT NULL,
+          status TEXT DEFAULT 'pending',
+          metadata JSONB,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        )
+      `;
+
+      // Invoices table
+      await sql`
+        CREATE TABLE IF NOT EXISTS invoices (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          user_id UUID REFERENCES users(id),
+          amount DECIMAL NOT NULL,
+          status TEXT DEFAULT 'unpaid',
+          metadata JSONB,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        )
+      `;
+
+      // Generic documents table for everything else
+      await sql`
+        CREATE TABLE IF NOT EXISTS documents (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          collection TEXT NOT NULL,
+          data JSONB NOT NULL,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        )
+      `;
+
+      console.log("Database initialized successfully with all tables");
     } catch (error) {
       console.error("Failed to initialize database:", error);
     }
@@ -99,64 +156,178 @@ app.get("/api/health", async (req, res) => {
   });
 });
 
-// User routes
-app.get("/api/users", async (req, res) => {
+// Auth routes
+app.post("/api/auth/signup", async (req, res) => {
   if (!sql) return res.status(500).json({ error: "Database not connected" });
+  const { email, password, name, role } = req.body;
   try {
-    const users = await sql`SELECT id, email, name, role, created_at FROM users ORDER BY created_at DESC`;
-    res.json(users);
-  } catch (error) {
-    console.error("Error fetching users:", error);
-    res.status(500).json({ error: "Failed to fetch users" });
-  }
-});
+    const [existing] = await sql`SELECT id FROM users WHERE email = ${email}`;
+    if (existing) return res.status(400).json({ error: "Email already in use" });
 
-app.post("/api/users", async (req, res) => {
-  if (!sql) return res.status(500).json({ error: "Database not connected" });
-  const { email, name, role } = req.body;
-  try {
     const [user] = await sql`
-      INSERT INTO users (email, name, role)
-      VALUES (${email}, ${name}, ${role || 'client'})
+      INSERT INTO users (email, password, name, role)
+      VALUES (${email}, ${password}, ${name}, ${role || 'client'})
       RETURNING id, email, name, role, created_at
     `;
     res.status(201).json(user);
   } catch (error) {
-    console.error("Error creating user:", error);
+    console.error("Signup error:", error);
     res.status(500).json({ error: "Failed to create user" });
   }
 });
 
-// Job routes
-app.get("/api/jobs", async (req, res) => {
+app.post("/api/auth/signin", async (req, res) => {
   if (!sql) return res.status(500).json({ error: "Database not connected" });
+  const { email, password } = req.body;
   try {
-    const jobs = await sql`
-      SELECT j.*, u.name as client_name 
-      FROM jobs j 
-      LEFT JOIN users u ON j.client_id = u.id 
-      ORDER BY j.created_at DESC
-    `;
-    res.json(jobs);
+    const [user] = await sql`SELECT * FROM users WHERE email = ${email}`;
+    if (!user) return res.status(404).json({ error: "User not found" });
+    if (user.password !== password) return res.status(401).json({ error: "Wrong password" });
+
+    const { password: _, ...userWithoutPassword } = user;
+    res.json(userWithoutPassword);
   } catch (error) {
-    console.error("Error fetching jobs:", error);
-    res.status(500).json({ error: "Failed to fetch jobs" });
+    console.error("Signin error:", error);
+    res.status(500).json({ error: "Failed to sign in" });
   }
 });
 
-app.post("/api/jobs", async (req, res) => {
+// Generic DB routes
+app.get("/api/db/:collection", async (req, res) => {
   if (!sql) return res.status(500).json({ error: "Database not connected" });
-  const { title, description, client_id } = req.body;
+  const { collection } = req.params;
+  const { whereField, whereOp, whereValue, orderByField, orderDirection, limitCount } = req.query;
+
   try {
-    const [job] = await sql`
-      INSERT INTO jobs (title, description, client_id)
-      VALUES (${title}, ${description}, ${client_id})
-      RETURNING *
-    `;
-    res.status(201).json(job);
+    // Check if it's a specific table or generic documents
+    const tables = ['users', 'jobs', 'messages', 'notifications', 'tickets', 'quotations', 'invoices'];
+    let data;
+
+    if (tables.includes(collection)) {
+      // Basic implementation for specific tables
+      let data;
+
+      if (whereField && whereOp && whereValue) {
+        const op = whereOp === '==' ? '=' : whereOp;
+        const query = `SELECT * FROM ${collection} WHERE ${whereField} ${op} $1 ${orderByField ? `ORDER BY ${orderByField} ${orderDirection === 'desc' ? 'DESC' : 'ASC'}` : 'ORDER BY created_at DESC'} ${limitCount ? `LIMIT ${limitCount}` : ''}`;
+        data = await (sql as any).unsafe(query, [whereValue]);
+      } else {
+        const query = `SELECT * FROM ${collection} ${orderByField ? `ORDER BY ${orderByField} ${orderDirection === 'desc' ? 'DESC' : 'ASC'}` : 'ORDER BY created_at DESC'} ${limitCount ? `LIMIT ${limitCount}` : ''}`;
+        data = await (sql as any).unsafe(query);
+      }
+      res.json(data);
+    } else {
+      // Generic documents table
+      let docs;
+      if (whereField && whereOp && whereValue) {
+        const query = `SELECT id, data, created_at FROM documents WHERE collection = $1 AND data->>$2 = $3 ORDER BY created_at DESC ${limitCount ? `LIMIT ${limitCount}` : ''}`;
+        docs = await (sql as any).unsafe(query, [collection, whereField, whereValue]);
+      } else {
+        const query = `SELECT id, data, created_at FROM documents WHERE collection = $1 ORDER BY created_at DESC ${limitCount ? `LIMIT ${limitCount}` : ''}`;
+        docs = await (sql as any).unsafe(query, [collection]);
+      }
+      const data = docs.map((d: any) => ({ ...d.data, id: d.id, createdAt: d.created_at }));
+      res.json(data);
+    }
   } catch (error) {
-    console.error("Error creating job:", error);
-    res.status(500).json({ error: "Failed to create job" });
+    console.error(`Error fetching ${collection}:`, error);
+    res.status(500).json({ error: `Failed to fetch ${collection}` });
+  }
+});
+
+app.get("/api/db/:collection/:id", async (req, res) => {
+  if (!sql) return res.status(500).json({ error: "Database not connected" });
+  const { collection, id } = req.params;
+  try {
+    const tables = ['users', 'jobs', 'messages', 'notifications', 'tickets', 'quotations', 'invoices'];
+    let data;
+    if (tables.includes(collection)) {
+      const result = await (sql as any).unsafe(`SELECT * FROM ${collection} WHERE id = $1`, [id]);
+      data = result[0];
+    } else {
+      const result = await sql`SELECT data FROM documents WHERE id = ${id} AND collection = ${collection}`;
+      data = result[0] ? { ...result[0].data, id } : null;
+    }
+    if (!data) return res.status(404).json({ error: "Not found" });
+    res.json(data);
+  } catch (error) {
+    console.error(`Error fetching ${collection}/${id}:`, error);
+    res.status(500).json({ error: "Failed to fetch document" });
+  }
+});
+
+app.post("/api/db/:collection", async (req, res) => {
+  if (!sql) return res.status(500).json({ error: "Database not connected" });
+  const { collection } = req.params;
+  const body = req.body;
+  try {
+    const tables = ['users', 'jobs', 'messages', 'notifications', 'tickets', 'quotations', 'invoices'];
+    let resultData;
+    if (tables.includes(collection)) {
+      const keys = Object.keys(body);
+      const values = Object.values(body);
+      const placeholders = keys.map((_, i) => `$${i + 1}`).join(', ');
+      const query = `INSERT INTO ${collection} (${keys.join(', ')}) VALUES (${placeholders}) RETURNING *`;
+      const result = await (sql as any).unsafe(query, values);
+      resultData = result[0];
+    } else {
+      const result = await sql`
+        INSERT INTO documents (collection, data)
+        VALUES (${collection}, ${body})
+        RETURNING id, data, created_at
+      `;
+      resultData = { ...result[0].data, id: result[0].id, createdAt: result[0].created_at };
+    }
+    io.emit("data:changed", collection);
+    res.status(201).json(resultData);
+  } catch (error) {
+    console.error(`Error creating in ${collection}:`, error);
+    res.status(500).json({ error: "Failed to create document" });
+  }
+});
+
+app.put("/api/db/:collection/:id", async (req, res) => {
+  if (!sql) return res.status(500).json({ error: "Database not connected" });
+  const { collection, id } = req.params;
+  const body = req.body;
+  try {
+    const tables = ['users', 'jobs', 'messages', 'notifications', 'tickets', 'quotations', 'invoices'];
+    if (tables.includes(collection)) {
+      const keys = Object.keys(body);
+      const values = Object.values(body);
+      const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
+      const query = `UPDATE ${collection} SET ${setClause} WHERE id = $${keys.length + 1} RETURNING *`;
+      await (sql as any).unsafe(query, [...values, id]);
+    } else {
+      await sql`
+        UPDATE documents 
+        SET data = data || ${body}::jsonb
+        WHERE id = ${id} AND collection = ${collection}
+      `;
+    }
+    io.emit("data:changed", collection);
+    res.json({ success: true });
+  } catch (error) {
+    console.error(`Error updating ${collection}/${id}:`, error);
+    res.status(500).json({ error: "Failed to update document" });
+  }
+});
+
+app.delete("/api/db/:collection/:id", async (req, res) => {
+  if (!sql) return res.status(500).json({ error: "Database not connected" });
+  const { collection, id } = req.params;
+  try {
+    const tables = ['users', 'jobs', 'messages', 'notifications', 'tickets', 'quotations', 'invoices'];
+    if (tables.includes(collection)) {
+      await (sql as any).unsafe(`DELETE FROM ${collection} WHERE id = $1`, [id]);
+    } else {
+      await sql`DELETE FROM documents WHERE id = ${id} AND collection = ${collection}`;
+    }
+    io.emit("data:changed", collection);
+    res.json({ success: true });
+  } catch (error) {
+    console.error(`Error deleting ${collection}/${id}:`, error);
+    res.status(500).json({ error: "Failed to delete document" });
   }
 });
 

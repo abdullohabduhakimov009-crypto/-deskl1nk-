@@ -22,84 +22,55 @@ export type User = {
 };
 
 class LocalDb {
-  private getData(collection: string): any[] {
-    const data = localStorage.getItem(`desklink_${collection}`);
-    return data ? JSON.parse(data) : [];
-  }
-
   private listeners: { [collection: string]: (() => void)[] } = {};
 
   private notifyListeners(collection: string) {
     if (this.listeners[collection]) {
-      setTimeout(() => {
-        if (this.listeners[collection]) {
-          this.listeners[collection].forEach(callback => callback());
-        }
-      }, 0);
+      this.listeners[collection].forEach(callback => callback());
     }
   }
 
-  private setData(collection: string, data: any[]) {
-    try {
-      localStorage.setItem(`desklink_${collection}`, JSON.stringify(data));
-      this.notifyListeners(collection);
-    } catch (e: any) {
-      if (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED') {
-        if (collection === 'messages' || collection === 'notifications') {
-          const prunedData = data.slice(Math.floor(data.length / 2));
-          try {
-            localStorage.setItem(`desklink_${collection}`, JSON.stringify(prunedData));
-            this.notifyListeners(collection);
-            return;
-          } catch (retryError) {
-            console.error(`Failed to prune ${collection}:`, retryError);
-          }
-        }
-      }
-      throw e;
-    }
-  }
-
-  // Auth Mocks
+  // Auth
   async signIn(email: string, pass: string): Promise<User> {
-    const users = this.getData('users');
-    const user = users.find(u => u.email === email);
-    if (!user) {
-      const err = new Error('auth/user-not-found');
-      (err as any).code = 'auth/user-not-found';
+    const response = await fetch('/api/auth/signin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password: pass })
+    });
+    
+    if (!response.ok) {
+      const error = await response.json();
+      const err = new Error(error.error || 'auth/failed');
+      (err as any).code = error.error === 'User not found' ? 'auth/user-not-found' : 'auth/wrong-password';
       throw err;
     }
-    if (user.password && user.password !== pass) {
-      const err = new Error('auth/wrong-password');
-      (err as any).code = 'auth/wrong-password';
-      throw err;
-    }
-    localStorage.setItem('desklink_user', JSON.stringify(user));
+
+    const user = await response.json();
+    const mappedUser = { ...user, uid: user.id };
+    localStorage.setItem('desklink_user', JSON.stringify(mappedUser));
     this.notifyListeners('users');
-    return user;
+    return mappedUser;
   }
 
   async signUp(email: string, pass: string, role: string, uid?: string, name?: string): Promise<User> {
-    const users = this.getData('users');
-    if (users.find(u => u.email === email)) {
-      const err = new Error('auth/email-already-in-use');
+    const response = await fetch('/api/auth/signup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password: pass, role, name })
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      const err = new Error(error.error || 'auth/failed');
       (err as any).code = 'auth/email-already-in-use';
       throw err;
     }
-    
-    const newUser: User = {
-      uid: uid || uuidv4(),
-      email,
-      name,
-      role: role as any,
-      password: pass, // Store password for mock sign-in
-      createdAt: new Date().toISOString(),
-    };
-    
-    users.push(newUser);
-    this.setData('users', users);
-    localStorage.setItem('desklink_user', JSON.stringify(newUser));
-    return newUser;
+
+    const user = await response.json();
+    const mappedUser = { ...user, uid: user.id };
+    localStorage.setItem('desklink_user', JSON.stringify(mappedUser));
+    this.notifyListeners('users');
+    return mappedUser;
   }
 
   signOut() {
@@ -112,52 +83,38 @@ class LocalDb {
     return user ? JSON.parse(user) : null;
   }
 
-  // Firestore Mocks
+  // Firestore
   async addDoc(collectionName: string, data: any) {
-    const items = this.getData(collectionName);
-    const newDoc = {
-      ...data,
-      id: uuidv4(),
-      createdAt: data.createdAt || new Date().toISOString(),
-    };
-    items.push(newDoc);
-    
-    // Proactively limit log-like collections to prevent QuotaExceededError
-    if (['messages', 'notifications'].includes(collectionName) && items.length > 200) {
-      items.splice(0, items.length - 200); // Keep only the last 200 items
-    }
-    
-    this.setData(collectionName, items);
-    return { id: newDoc.id };
+    const response = await fetch(`/api/db/${collectionName}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    const result = await response.json();
+    return { id: result.id };
   }
 
   async setDoc(collectionName: string, id: string, data: any, options?: { merge?: boolean }) {
-    const items = this.getData(collectionName);
-    const index = items.findIndex(item => item.uid === id || item.id === id);
-    
-    if (index > -1) {
-      if (options?.merge) {
-        items[index] = { ...items[index], ...data };
-      } else {
-        items[index] = { ...data, id };
-      }
-    } else {
-      items.push({ ...data, id: id || uuidv4() });
-    }
-    
-    // Proactively limit log-like collections to prevent QuotaExceededError
-    if (['messages', 'notifications'].includes(collectionName) && items.length > 200) {
-      items.splice(0, items.length - 200); // Keep only the last 200 items
-    }
-    
-    this.setData(collectionName, items);
+    const response = await fetch(`/api/db/${collectionName}/${id}`, {
+      method: options?.merge ? 'PUT' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    return response.json();
   }
 
   async getDoc(collectionName: string, id: string) {
-    const items = this.getData(collectionName);
-    const item = items.find(i => i.uid === id || i.id === id);
+    const response = await fetch(`/api/db/${collectionName}/${id}`);
+    if (!response.ok) {
+      return {
+        id,
+        exists: () => false,
+        data: () => null
+      };
+    }
+    const item = await response.json();
     return {
-      id: id,
+      id,
       exists: () => !!item,
       data: () => item,
       get: (field: string) => item ? item[field] : undefined
@@ -165,50 +122,27 @@ class LocalDb {
   }
 
   async getDocs(collectionName: string, queryConstraints?: any[]) {
-    let items = this.getData(collectionName);
+    let url = `/api/db/${collectionName}?`;
     
     if (queryConstraints) {
       queryConstraints.forEach(constraint => {
         if (constraint.type === 'where') {
           const [field, op, value] = constraint.args;
-          if (op === '==') {
-            items = items.filter(item => item[field] === value);
-          } else if (op === '!=') {
-            items = items.filter(item => item[field] !== value);
-          } else if (op === '>') {
-            items = items.filter(item => item[field] > value);
-          } else if (op === '<') {
-            items = items.filter(item => item[field] < value);
-          } else if (op === '>=') {
-            items = items.filter(item => item[field] >= value);
-          } else if (op === '<=') {
-            items = items.filter(item => item[field] <= value);
-          } else if (op === 'array-contains') {
-            items = items.filter(item => Array.isArray(item[field]) && item[field].includes(value));
-          } else if (op === 'in') {
-            items = items.filter(item => Array.isArray(value) && value.includes(item[field]));
-          }
+          url += `whereField=${field}&whereOp=${encodeURIComponent(op)}&whereValue=${encodeURIComponent(value)}&`;
+        } else if (constraint.type === 'orderBy') {
+          const [field, direction] = constraint.args;
+          url += `orderByField=${field}&orderDirection=${direction}&`;
+        } else if (constraint.type === 'limit') {
+          const [n] = constraint.args;
+          url += `limitCount=${n}&`;
         }
       });
-
-      const orderByConstraint = queryConstraints.find(c => c.type === 'orderBy');
-      if (orderByConstraint) {
-        const [field, direction] = orderByConstraint.args;
-        items.sort((a, b) => {
-          if (a[field] < b[field]) return direction === 'asc' ? -1 : 1;
-          if (a[field] > b[field]) return direction === 'asc' ? 1 : -1;
-          return 0;
-        });
-      }
-
-      const limitConstraint = queryConstraints.find(c => c.type === 'limit');
-      if (limitConstraint) {
-        const [n] = limitConstraint.args;
-        items = items.slice(0, n);
-      }
     }
+
+    const response = await fetch(url);
+    const items = await response.json();
     
-    const docs = items.map(item => ({
+    const docs = items.map((item: any) => ({
       id: item.id || item.uid,
       exists: () => true,
       data: () => item,
@@ -220,7 +154,7 @@ class LocalDb {
       docs,
       docChanges: () => [],
       forEach: (callback: any) => {
-        docs.forEach(doc => callback(doc));
+        docs.forEach((doc: any) => callback(doc));
       },
       empty: items.length === 0,
       size: items.length,
@@ -229,61 +163,54 @@ class LocalDb {
   }
 
   onSnapshot(collectionName: string, callback: (snapshot: any) => void, queryConstraints?: any[], id?: string) {
-    let previousIds = new Set<string>();
-    let firstLoad = true;
-
     const load = async () => {
-      if (id) {
-        const snapshot = await this.getDoc(collectionName, id);
-        callback(snapshot);
-        return;
+      try {
+        if (id) {
+          const snapshot = await this.getDoc(collectionName, id);
+          callback(snapshot);
+        } else {
+          const snapshot = await this.getDocs(collectionName, queryConstraints);
+          callback(snapshot);
+        }
+      } catch (error) {
+        console.error(`Error in onSnapshot for ${collectionName}:`, error);
       }
-
-      const snapshot = await this.getDocs(collectionName, queryConstraints);
-      const currentIds = new Set(snapshot.docs.map(d => d.id));
-      
-      const changes: any[] = [];
-      if (!firstLoad) {
-        snapshot.docs.forEach(doc => {
-          if (!previousIds.has(doc.id)) {
-            changes.push({ type: 'added', doc });
-          }
-        });
-      }
-      
-      (snapshot as any).docChanges = () => changes;
-      
-      previousIds = currentIds;
-      firstLoad = false;
-      
-      callback(snapshot);
     };
     
     load();
     
-    if (!this.listeners[collectionName]) {
-      this.listeners[collectionName] = [];
-    }
-    this.listeners[collectionName].push(load);
-
-    const interval = setInterval(load, 5000); 
+    // In a real app, we'd use Socket.io to trigger this
+    // For now, we'll keep the polling but also listen for Socket.io events if available
+    const interval = setInterval(load, 10000); 
     
+    // Listen for data:changed events from server
+    const handleDataChanged = (changedCollection: string) => {
+      if (changedCollection === collectionName) {
+        load();
+      }
+    };
+
+    // We assume socket is available globally or we can use a simple event emitter
+    window.addEventListener('db-changed', ((e: CustomEvent) => handleDataChanged(e.detail)) as any);
+
     return () => {
       clearInterval(interval);
-      if (this.listeners[collectionName]) {
-        this.listeners[collectionName] = this.listeners[collectionName].filter(l => l !== load);
-      }
+      window.removeEventListener('db-changed', ((e: CustomEvent) => handleDataChanged(e.detail)) as any);
     };
   }
 
   async updateDoc(collectionName: string, id: string, data: any) {
-    await this.setDoc(collectionName, id, data, { merge: true });
+    await fetch(`/api/db/${collectionName}/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
   }
 
   async deleteDoc(collectionName: string, id: string) {
-    let items = this.getData(collectionName);
-    items = items.filter(i => i.id !== id && i.uid !== id);
-    this.setData(collectionName, items);
+    await fetch(`/api/db/${collectionName}/${id}`, {
+      method: 'DELETE'
+    });
   }
 }
 
