@@ -8,7 +8,13 @@ export default defineConfig(({mode}) => {
   return {
     plugins: [react(), tailwindcss()],
     define: {
-      'process.env': env,
+      'process.env.VITE_': JSON.stringify(
+        Object.fromEntries(
+          Object.entries(env)
+            .filter(([key]) => key.startsWith('VITE_'))
+            .map(([key, val]) => [key, val])
+        )
+      ),
     },
     resolve: {
       alias: {
