@@ -398,6 +398,25 @@ app.post("/api/auth/signin", async (req, res) => {
   }
 });
 
+// Admin auth endpoint
+app.post("/api/auth/admin", async (req, res) => {
+  const { password } = req.body;
+  const masterPassword = process.env.MASTER_PASSWORD || 'desklink2026';
+  const adminEmail = process.env.ADMIN_EMAIL || 'logistmate@gmail.com';
+  
+  if (password !== masterPassword) {
+    return res.status(401).json({ error: "Wrong admin password" });
+  }
+  
+  // Return admin user object
+  res.json({
+    uid: 'admin-' + randomUUID(),
+    email: adminEmail,
+    role: 'admin',
+    name: 'Administrator'
+  });
+});
+
 // Generic DB routes
 app.get("/api/db/:collection", async (req, res) => {
   if (!sql) return res.status(500).json({ error: "Database not connected" });

@@ -1971,46 +1971,27 @@ const LoginModal = ({
     setSuccess('');
 
     if (loginType === 'admin') {
-      const adminEmail = import.meta.env.VITE_ADMIN_EMAIL || 'logistmate@gmail.com';
-      const masterPassword = import.meta.env.VITE_MASTER_PASSWORD || 'desklink2026';
-      
-      if (password === masterPassword) {
-        try {
-          let user;
-          
-          try {
-            const result = await signInWithEmailAndPassword(auth, adminEmail, password);
-            user = result.user;
-          } catch (signInErr: any) {
-            if (signInErr.code === 'auth/user-not-found' || signInErr.code === 'auth/invalid-credential') {
-              // If the admin account doesn't exist yet, create it with the master password
-              const result = await createUserWithEmailAndPassword(auth, adminEmail, password);
-              user = result.user;
-              // Create the user profile in Firestore
-              await setDoc(doc(db, "users", user.uid), {
-                uid: user.uid,
-                email: adminEmail,
-                role: 'admin',
-                name: 'Administrator',
-                createdAt: serverTimestamp(),
-                status: 'Active'
-              });
-            } else {
-              throw signInErr;
-            }
-          }
+      try {
+        // Use the server admin endpoint
+        const response = await fetch('/api/auth/admin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password })
+        });
 
-          setSuccess('Admin login successful!');
-          onClose();
-          onLoginSuccess('admin', { uid: user.uid, email: user.email, role: 'admin', name: 'Administrator' });
-        } catch (err: any) {
-          console.error("Admin login error:", err);
-          setError(err.message || "Failed to authenticate admin account");
-        } finally {
-          setIsLoading(false);
+        if (!response.ok) {
+          const data = await response.json();
+          throw new Error(data.error || 'Admin authentication failed');
         }
-      } else {
-        setError('Wrong admin password. Please try again.');
+
+        const user = await response.json();
+        setSuccess('Admin login successful!');
+        onClose();
+        onLoginSuccess('admin', user);
+      } catch (err: any) {
+        console.error("Admin login error:", err);
+        setError(err.message || "Failed to authenticate admin account");
+      } finally {
         setIsLoading(false);
       }
       return;

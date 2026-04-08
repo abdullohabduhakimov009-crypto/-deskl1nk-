@@ -8,12 +8,8 @@ export default defineConfig(({mode}) => {
   return {
     plugins: [react(), tailwindcss()],
     define: {
-      'process.env.VITE_': JSON.stringify(
-        Object.fromEntries(
-          Object.entries(env)
-            .filter(([key]) => key.startsWith('VITE_'))
-            .map(([key, val]) => [key, val])
-        )
+      'process.env': Object.fromEntries(
+        Object.entries(env).filter(([key]) => key.startsWith('VITE_') || key.startsWith('REACT_APP_'))
       ),
     },
     resolve: {
