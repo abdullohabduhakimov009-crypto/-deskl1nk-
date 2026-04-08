@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { db, collection, query, where, onSnapshot, orderBy, limit, addDoc, serverTimestamp, deleteDoc, updateDoc, doc } from '../firebase';
+import { getDocuments, createDocument, updateDocument, deleteDocument } from '../lib/api';
 import { AnimatePresence, motion } from 'framer-motion';
 import { HiBell as Bell, HiChatBubbleLeftRight as MessageSquare, HiTicket as Ticket, HiXMark as X } from 'react-icons/hi2';
 
@@ -38,47 +38,30 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode, current
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [toasts, setToasts] = useState<any[]>([]);
 
-  // Listen for persistent notifications from Firestore
+  // Fetch persistent notifications
   useEffect(() => {
     if (!currentUser?.uid) {
       setNotifications([]);
       return;
     }
 
-    const q = query(
-      collection(db, "notifications"),
-      where("userId", "==", currentUser.uid),
-      orderBy("createdAt", "desc"),
-      limit(50)
-    );
+    const fetchNotifications = async () => {
+      try {
+        const notifs = await getDocuments("notifications", { userId: currentUser.uid });
+        const formattedNotifs = notifs.map(doc => ({
+          id: doc.id,
+          ...doc,
+          timestamp: new Date(doc.createdAt)
+        })) as Notification[];
+        setNotifications(formattedNotifs);
+      } catch (error) {
+        console.error("Error fetching notifications:", error);
+      }
+    };
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const notifs = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data(),
-        timestamp: doc.data().createdAt?.toDate?.() || new Date()
-      })) as Notification[];
-      setNotifications(notifs);
-
-      // Show toast for new unread notifications (only if added after initial load)
-      snapshot.docChanges().forEach((change) => {
-        if (change.type === "added" && !change.doc.metadata.hasPendingWrites) {
-          const data = change.doc.data();
-          if (!data.read) {
-            showToast({
-              id: change.doc.id,
-              type: data.type,
-              title: data.title,
-              message: data.message
-            });
-          }
-        }
-      });
-    }, (error) => {
-      console.error("Notification listener error:", error);
-    });
-
-    return () => unsubscribe();
+    fetchNotifications();
+    const interval = setInterval(fetchNotifications, 5000);
+    return () => clearInterval(interval);
   }, [currentUser?.uid]);
 
   const showToast = useCallback((toast: any) => {
@@ -93,11 +76,11 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode, current
     if (!userId) return;
 
     try {
-      await addDoc(collection(db, "notifications"), {
+      await createDocument("notifications", {
         ...notif,
         userId,
         read: false,
-        createdAt: serverTimestamp()
+        createdAt: new Date().toISOString()
       });
     } catch (error) {
       console.error("Error adding notification:", error);
@@ -106,7 +89,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode, current
 
   const removeNotification = useCallback(async (id: string) => {
     try {
-      await deleteDoc(doc(db, "notifications", id));
+      await deleteDocument("notifications", id);
     } catch (error) {
       console.error("Error removing notification:", error);
     }
@@ -114,7 +97,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode, current
 
   const markAsRead = useCallback(async (id: string) => {
     try {
-      await updateDoc(doc(db, "notifications", id), {
+      await updateDocument("notifications", id, {
         read: true
       });
     } catch (error) {
@@ -127,7 +110,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode, current
     const unreadNotifs = notifications.filter(n => !n.read);
     try {
       await Promise.all(unreadNotifs.map(n => 
-        updateDoc(doc(db, "notifications", n.id), { read: true })
+        updateDocument("notifications", n.id, { read: true })
       ));
     } catch (error) {
       console.error("Error marking all as read:", error);

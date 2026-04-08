@@ -81,33 +81,16 @@ import ContactPage from "./components/ContactPage";
 import { v4 as uuidv4 } from 'uuid';
 import { io } from 'socket.io-client';
 import { 
-  auth, 
-  db, 
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
+  signIn: signInWithEmailAndPassword,
+  signUp: createUserWithEmailAndPassword,
   onAuthStateChanged, 
   signOut,
-  doc, 
-  getDoc, 
-  setDoc, 
-  addDoc,
-  collection,
-  query,
-  where,
-  orderBy,
-  onSnapshot,
-  getDocs,
-  updateDoc,
-  serverTimestamp
-} from "./firebase";
-// import { 
-//   signInWithEmailAndPassword,
-//   createUserWithEmailAndPassword,
-//   onAuthStateChanged, 
-//   signOut,
-//   User as FirebaseUser
-// } from "firebase/auth";
-// import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
+  getDocument,
+  getDocuments,
+  createDocument,
+  updateDocument,
+  adminSignIn
+} from "./lib/api";
 import createGlobe from "cobe";
 
 const NetworkAnimation = () => {
@@ -2005,43 +1988,20 @@ const LoginModal = ({
       return;
     }
     try {
-      const result = await signInWithEmailAndPassword(auth, email, password);
-      const user = result.user;
+      const user = await signInWithEmailAndPassword(email, password);
 
-      const userDoc = await getDoc(doc(db, "users", user.uid));
+      if (user.role === 'admin') {
+        setError("Admin access is only permitted via the Admin login portal.");
+        await signOut();
+        setIsLoading(false);
+        return;
+      }
+
+      const effectiveRole = user.role || loginType;
       
-      if (userDoc.exists()) {
-        const userData = userDoc.data();
-        
-        if (userData.role === 'admin') {
-          setError("Admin access is only permitted via the Admin login portal.");
-          await signOut(auth);
-          setIsLoading(false);
-          return;
-        }
-
-        const effectiveRole = userData.role || loginType;
-        
-        // Update last login in background
-        setDoc(doc(db, "users", user.uid), { lastLogin: serverTimestamp() }, { merge: true }).catch(err => console.error("Background lastLogin update error:", err));
-        setSuccess('Login successful! Welcome back.');
-        onClose();
-        onLoginSuccess(effectiveRole, userData);
-      } else {
-        // If document doesn't exist, we don't sign out. 
-        // The global onAuthStateChanged listener in App.tsx will handle creating the document.
-        // We just transition the UI to the expected portal based on loginType.
-        const fallbackRole = (loginType as string) === 'admin' ? 'admin' : ((loginType as string) === 'engineer' ? 'engineer' : 'client');
-        const fallbackData = { 
-          uid: user.uid, 
-          email: user.email, 
-          role: fallbackRole,
-          name: user.displayName || 'User'
-        };
-        
-        setSuccess('Login successful! Creating your profile...');
-        onClose();
-        onLoginSuccess(fallbackData.role, fallbackData);
+      setSuccess('Login successful! Welcome back.');
+      onClose();
+      onLoginSuccess(effectiveRole, user);
       }
     } catch (err: any) {
       console.error("Login error:", err);
@@ -2446,29 +2406,19 @@ const SignUpModal = ({ isOpen, onClose, onLoginClick, onEngineerContinue, onClie
       // Perform signup and data persistence
       const performSignup = async () => {
         try {
-          // Create Firebase Auth user first to get the correct UID
-          const authResult = await createUserWithEmailAndPassword(auth, formData.companyEmail, formData.password, 'client', `${formData.firstName} ${formData.lastName}`);
-          const uid = authResult.user.uid;
-
-          const userData = {
-            uid: uid,
-            email: formData.companyEmail,
+          const userData = await createUserWithEmailAndPassword(formData.companyEmail, formData.password, 'client', `${formData.firstName} ${formData.lastName}`);
+          const fullUserData = {
+            ...userData,
             companyName: formData.companyName,
             firstName: formData.firstName,
             lastName: formData.lastName,
-            name: `${formData.firstName} ${formData.lastName}`,
             country: formData.country?.label || '',
             companySize: formData.companySize,
-            role: 'client',
             status: 'Active',
-            createdAt: serverTimestamp()
+            createdAt: new Date().toISOString()
           };
 
-          // Create Firestore document with the Auth UID
-          await setDoc(doc(db, "users", uid), userData);
-
-          // Transition UI
-          onClientContinue(userData);
+          onClientContinue(fullUserData);
           onClose();
         } catch (err: any) {
           console.error("Client signup error:", err);
@@ -3215,13 +3165,13 @@ const LogTicket = () => {
 
   const handleSubmit = async () => {
     try {
-      await addDoc(collection(db, "tickets"), {
+      await createDocument("tickets", {
         ...formData,
         status: 'Pending',
-        authorUid: auth.currentUser?.uid || 'guest',
-        clientEmail: auth.currentUser?.email || 'guest@example.com',
-        clientName: auth.currentUser?.displayName || 'Guest User',
-        createdAt: serverTimestamp(),
+        authorUid: 'guest',
+        clientEmail: 'guest@example.com',
+        clientName: 'Guest User',
+        createdAt: new Date().toISOString(),
       });
       setIsSubmitted(true);
     } catch (error) {
@@ -3562,89 +3512,14 @@ const AppContent = () => {
 
   // Add reactive listener for user data
   useEffect(() => {
-    let unsubscribe: (() => void) | undefined;
-
-    const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
+    const unsubscribeAuth = onAuthStateChanged((user) => {
       if (user) {
-        const userRef = doc(db, "users", user.uid);
+        const role = user.role || 'client';
+        handleLoginSuccess(role, user);
         
-        // Initial fetch to handle role and login success
-        try {
-          const userDoc = await getDoc(userRef);
-          let userData = userDoc.exists() ? userDoc.data() : null;
-          const adminEmail = import.meta.env.VITE_ADMIN_EMAIL || 'logistmate@gmail.com';
-          const masterAdminEmail = 'abdullohabduhakimov009@gmail.com';
-          const secondaryAdminEmail = 'abdullohabdu123hakimov009@gmail.com';
-          let role = userData?.role || (user.email === adminEmail || user.email === masterAdminEmail || user.email === secondaryAdminEmail ? 'admin' : 'client');
-          
-          if (!userDoc.exists()) {
-            console.log("[Auth] User document not found, creating initial profile for role:", role);
-            const newUserData = {
-              uid: user.uid,
-              email: user.email,
-              role: role,
-              name: user.displayName || 'User',
-              createdAt: serverTimestamp()
-            };
-            try {
-              await setDoc(userRef, newUserData);
-              userData = newUserData;
-            } catch (setErr) {
-              console.error("[Auth] Error creating initial user document:", setErr);
-              // Continue anyway, we have the user object
-            }
-          }
-          
-          console.log("[Auth] Login success for role:", role);
-          handleLoginSuccess(role, userData || { uid: user.uid, email: user.email, role: role, name: user.displayName || 'User' });
-        } catch (error) {
-          console.error("[Auth] Error fetching initial user data:", error);
-          // Fallback: try to determine role from email and proceed
-          const adminEmail = import.meta.env.VITE_ADMIN_EMAIL || 'logistmate@gmail.com';
-          const role = user.email === adminEmail ? 'admin' : 'client';
-          console.log("[Auth] Falling back to email-based role:", role);
-          handleLoginSuccess(role, { uid: user.uid, email: user.email, role: role, name: user.displayName || 'User' });
-        }
-
-        // Setup real-time listener
-        unsubscribe = onSnapshot(userRef, (docSnap) => {
-          if (docSnap.exists()) {
-            const data = { id: docSnap.id, ...docSnap.data() };
-            if (data.role === 'admin') setAdminData(data);
-            else if (data.role === 'engineer') {
-              // Data Recovery Logic: If this is a basic profile from signUp, try to find the full profile
-              if (!data.hourlyRate || data.hourlyRate === '0') {
-                const recoverData = async () => {
-                  try {
-                    const q = query(collection(db, "users"), where("email", "==", data.email), where("role", "==", "engineer"));
-                    const querySnapshot = await getDocs(q);
-                    let fullProfile: any = null;
-                    
-                    querySnapshot.docs.forEach((doc: any) => {
-                      const docData = doc.data();
-                      if (doc.id !== user.uid && (docData.hourlyRate && docData.hourlyRate !== '0')) {
-                        fullProfile = docData;
-                      }
-                    });
-
-                    if (fullProfile) {
-                      console.log("Recovering lost engineer profile data...");
-                      const { uid, ...rest } = fullProfile;
-                      await updateDoc(userRef, { ...rest, recoveredFrom: uid });
-                    }
-                  } catch (err) {
-                    console.error("Error recovering profile data:", err);
-                  }
-                };
-                recoverData();
-              }
-              setEngineerData(data);
-            }
-            else if (data.role === 'client') setClientData(data);
-          }
-        }, (error) => {
-          console.error("Error listening to user data:", error);
-        });
+        if (role === 'admin') setAdminData(user);
+        else if (role === 'engineer') setEngineerData(user);
+        else if (role === 'client') setClientData(user);
       } else {
         setIsEngineerLoggedIn(false);
         setIsClientLoggedIn(false);
@@ -3660,7 +3535,6 @@ const AppContent = () => {
 
     return () => {
       unsubscribeAuth();
-      if (unsubscribe) unsubscribe();
     };
   }, []);
 
@@ -3675,48 +3549,40 @@ const AppContent = () => {
 
   const handleEngineerComplete = async (data: any) => {
     try {
-      // Create Firebase Auth user first to get the correct UID
-      const authResult = await createUserWithEmailAndPassword(auth, data.email, data.password, 'engineer', data.fullName);
-      const uid = authResult.user.uid;
-      const userData = {
-        uid: uid,
-      email: data.email,
-      name: data.fullName,
-      fullName: data.fullName,
-      displayName: data.fullName,
-      role: 'engineer',
-      status: 'Active',
-      specialization: data.specializations?.[0]?.label || data.specializations?.[0] || data.specialization || '',
-      specializations: data.specializations || [],
-      experience: data.experience || '',
-      engineerLevel: data.engineerLevel || 'L1',
-      country: data.country || '',
-      city: data.city || '',
-      zipCode: data.zipCode || '',
-      dobDay: data.dobDay || null,
-      dobMonth: data.dobMonth || null,
-      dobYear: data.dobYear || null,
-      currency: data.currency || 'USD',
-      hourlyRate: data.hourlyRate || '0',
-      halfDayRate: data.halfDayRate || '0',
-      fullDayRate: data.fullDayRate || '0',
-      skills: data.skills || [],
-      languages: data.languages || [],
-      phoneNumber: data.phoneNumber || '',
-      phoneCountryCode: data.phoneCountryCode || '',
-      whatsappNumber: data.whatsappNumber || '',
-      whatsappCountryCode: data.whatsappCountryCode || '',
-      profilePic: data.profilePic || null,
-      cvFile: data.cvFile || null,
-      idFile: data.idFile || null,
-      createdAt: serverTimestamp(),
-      lastLogin: serverTimestamp()
-    };
-
-      // Create Firestore document with the Auth UID
-      await setDoc(doc(db, "users", uid), userData);
+      const authUser = await createUserWithEmailAndPassword(data.email, data.password, 'engineer', data.fullName);
       
-      trackEvent("User", "Engineer Signup", uid);
+      const userData = {
+        ...authUser,
+        fullName: data.fullName,
+        displayName: data.fullName,
+        specialization: data.specializations?.[0]?.label || data.specializations?.[0] || data.specialization || '',
+        specializations: data.specializations || [],
+        experience: data.experience || '',
+        engineerLevel: data.engineerLevel || 'L1',
+        country: data.country || '',
+        city: data.city || '',
+        zipCode: data.zipCode || '',
+        dobDay: data.dobDay || null,
+        dobMonth: data.dobMonth || null,
+        dobYear: data.dobYear || null,
+        currency: data.currency || 'USD',
+        hourlyRate: data.hourlyRate || '0',
+        halfDayRate: data.halfDayRate || '0',
+        fullDayRate: data.fullDayRate || '0',
+        skills: data.skills || [],
+        languages: data.languages || [],
+        phoneNumber: data.phoneNumber || '',
+        phoneCountryCode: data.phoneCountryCode || '',
+        whatsappNumber: data.whatsappNumber || '',
+        whatsappCountryCode: data.whatsappCountryCode || '',
+        profilePic: data.profilePic || null,
+        cvFile: data.cvFile || null,
+        idFile: data.idFile || null,
+        createdAt: new Date().toISOString(),
+        lastLogin: new Date().toISOString()
+      };
+      
+      trackEvent("User", "Engineer Signup", authUser.id);
       notify({
         type: 'success',
         title: 'Registration Complete',
@@ -3779,7 +3645,7 @@ const AppContent = () => {
 
   const handleLogout = async () => {
     try {
-      await signOut(auth);
+      await signOut();
       trackEvent("User", "Logout");
       setIsAdminLoggedIn(false);
       setIsEngineerLoggedIn(false);
